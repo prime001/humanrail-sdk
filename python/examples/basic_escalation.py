@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import os
 
-from escalation_engine import EscalationClient, generate_idempotency_key
+from humanrail import EscalationClient, generate_idempotency_key
 
 
 def main() -> None:

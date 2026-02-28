@@ -1,7 +1,7 @@
 """
-Webhook signature verification for the Escalation Engine.
+Webhook signature verification for the HumanRail.
 
-The Escalation Engine signs webhook payloads using HMAC-SHA256 with a
+The HumanRail signs webhook payloads using HMAC-SHA256 with a
 per-organization webhook secret. The signature header includes a timestamp
 to prevent replay attacks.
 
@@ -23,7 +23,7 @@ def verify_webhook_signature(
     secret: str,
     tolerance: int = 300,
 ) -> bool:
-    """Verify the authenticity and freshness of an Escalation Engine webhook event.
+    """Verify the authenticity and freshness of an HumanRail webhook event.
 
     This function:
     1. Parses the timestamp and HMAC from the signature header.
@@ -45,7 +45,7 @@ def verify_webhook_signature(
 
     Example::
 
-        from escalation_engine import verify_webhook_signature
+        from humanrail import verify_webhook_signature
 
         is_valid = verify_webhook_signature(
             payload=request.body.decode("utf-8"),

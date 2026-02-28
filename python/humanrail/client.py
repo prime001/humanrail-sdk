@@ -5,7 +5,7 @@ Provides both synchronous and asynchronous interfaces via httpx.
 
 Example::
 
-    from escalation_engine import EscalationClient
+    from humanrail import EscalationClient
 
     client = EscalationClient(api_key="ek_live_...")
     task = client.tasks.create(
@@ -577,7 +577,7 @@ def generate_idempotency_key(namespace: str, *parts: str) -> str:
 
     Example::
 
-        from escalation_engine import generate_idempotency_key
+        from humanrail import generate_idempotency_key
 
         key = generate_idempotency_key("order-service", "order-12345", "refund-check")
         # => "order-service:a1b2c3d4..."

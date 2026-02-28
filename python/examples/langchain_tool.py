@@ -18,7 +18,7 @@ import os
 import time
 import random
 
-from escalation_engine import EscalationClient
+from humanrail import EscalationClient
 
 # NOTE: In a real project, uncomment these imports:
 # from langchain_core.tools import tool

@@ -6,7 +6,7 @@ Route tasks to vetted human workers when AI hits its limits.
 Example::
 
     import os
-    from escalation_engine import EscalationClient
+    from humanrail import EscalationClient
 
     client = EscalationClient(api_key=os.environ["ESCALATION_API_KEY"])
 
