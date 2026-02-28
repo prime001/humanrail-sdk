@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "humanrail"
+version = "0.1.0"
+description = "Official Python SDK for HumanRail — route tasks to vetted human workers when AI hits its limits."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [{ name = "HumanRail", email = "contact@humanrail.dev" }]
+keywords = ["humanrail", "escalation", "human-in-the-loop", "hitl", "ai-agents", "langchain", "task-routing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+dependencies = [
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[project.urls]
+Homepage = "https://humanrail.dev"
+Documentation = "https://docs.humanrail.dev"
+Repository = "https://github.com/prime001/humanrail-sdk"
+Issues = "https://github.com/prime001/humanrail-sdk/issues"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "TCH"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

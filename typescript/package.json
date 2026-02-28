@@ -1,0 +1,60 @@
+{
+  "name": "@humanrail/sdk",
+  "version": "0.1.0",
+  "description": "Official TypeScript/JavaScript SDK for HumanRail — route tasks to vetted human workers when AI hits its limits.",
+  "license": "MIT",
+  "author": "HumanRail <contact@humanrail.dev>",
+  "homepage": "https://humanrail.dev",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "check": "biome check src/",
+    "format": "biome format --write src/",
+    "lint": "biome lint src/",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "undici": "^6.6.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prime001/humanrail-sdk.git",
+    "directory": "typescript"
+  },
+  "bugs": {
+    "url": "https://github.com/prime001/humanrail-sdk/issues"
+  },
+  "keywords": [
+    "humanrail",
+    "escalation",
+    "human-in-the-loop",
+    "hitl",
+    "ai-agents",
+    "langchain",
+    "task-routing"
+  ]
+}

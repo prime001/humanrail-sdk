@@ -1,0 +1,830 @@
+openapi: 3.1.0
+info:
+  title: Escalation Engine API
+  version: 1.0.0
+  description: |
+    Route tasks to vetted human workers when AI agents hit confidence or risk
+    thresholds. Create a task, receive a verified result, and pay the worker —
+    all through a single API.
+
+    ## Authentication
+
+    All API requests require a Bearer token in the `Authorization` header:
+
+    ```
+    Authorization: Bearer ek_live_...
+    ```
+
+    API keys are managed in the Escalation Engine dashboard.
+
+    ## Idempotency
+
+    All mutating endpoints accept an `Idempotency-Key` header. If a request
+    with the same key has already been processed, the original response is
+    returned. Keys are scoped to your organization and expire after 24 hours.
+
+    ## Rate Limits
+
+    The API enforces per-organization rate limits. When exceeded, responses
+    include a `Retry-After` header indicating how many seconds to wait.
+
+    ## Webhooks
+
+    Task lifecycle events are delivered to your configured callback URL.
+    Verify webhook signatures using HMAC-SHA256 with your webhook secret.
+    See the Webhook Events section for details.
+  contact:
+    name: Escalation Engine Support
+    email: support@escalation.engine
+    url: https://docs.escalation.engine
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: https://api.escalation.engine/v1
+    description: Production
+  - url: https://api.staging.escalation.engine/v1
+    description: Staging
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Tasks
+    description: Create, retrieve, list, and cancel human review tasks.
+  - name: Webhooks
+    description: Webhook event types and signature verification.
+  - name: Usage
+    description: Account usage and billing information.
+
+paths:
+  /tasks:
+    post:
+      operationId: createTask
+      tags: [Tasks]
+      summary: Create a task
+      description: |
+        Creates a new task for human review. If a task with the same
+        `idempotencyKey` already exists, the existing task is returned.
+
+        The task enters the `posted` state and is immediately eligible for
+        assignment to a worker from the appropriate pool based on `riskTier`
+        and `taskType`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreateRequest'
+            example:
+              idempotencyKey: order-12345-refund-check
+              taskType: refund_eligibility
+              riskTier: medium
+              slaSeconds: 300
+              payload:
+                orderId: order-12345
+                orderTotal: 89.99
+                reason: Item arrived damaged
+              outputSchema:
+                type: object
+                required: [eligible, reason_code]
+                properties:
+                  eligible:
+                    type: boolean
+                  reason_code:
+                    type: string
+                    enum: [approved, denied_policy, denied_timeframe, needs_review]
+                  notes:
+                    type: string
+              payout:
+                currency: USD
+                maxAmount: 0.50
+              callbackUrl: https://myapp.com/webhooks/escalation
+      responses:
+        '201':
+          description: Task created successfully.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '200':
+          description: Task already exists (idempotent replay).
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    get:
+      operationId: listTasks
+      tags: [Tasks]
+      summary: List tasks
+      description: |
+        Returns a paginated list of tasks for your organization, with optional
+        filters by status, type, and creation time.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+          description: Filter by task status.
+        - name: task_type
+          in: query
+          schema:
+            type: string
+          description: Filter by task type.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          description: Maximum number of tasks to return.
+        - name: after
+          in: query
+          schema:
+            type: string
+          description: Cursor for pagination (task ID to start after).
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter by creation time (ISO 8601, inclusive).
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter by creation time (ISO 8601, inclusive).
+      responses:
+        '200':
+          description: A paginated list of tasks.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks/{taskId}:
+    get:
+      operationId: getTask
+      tags: [Tasks]
+      summary: Get a task
+      description: Retrieves a task by its unique identifier.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: The task.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Task'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /tasks/{taskId}/cancel:
+    post:
+      operationId: cancelTask
+      tags: [Tasks]
+      summary: Cancel a task
+      description: |
+        Cancels a task that has not yet reached a terminal state.
+
+        Tasks in `posted` or `assigned` status can be cancelled. Tasks in
+        `submitted`, `verified`, `failed`, `cancelled`, or `expired` status
+        will return a 409 Conflict error.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+      responses:
+        '200':
+          description: Task cancelled successfully.
+          headers:
+            X-Request-Id:
+              $ref: '#/components/headers/X-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskCancelResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /webhooks/test:
+    post:
+      operationId: testWebhook
+      tags: [Webhooks]
+      summary: Send a test webhook event
+      description: |
+        Sends a test webhook event to your configured callback URL. Useful
+        for verifying your webhook handler is set up correctly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - eventType
+              properties:
+                eventType:
+                  $ref: '#/components/schemas/WebhookEventType'
+                callbackUrl:
+                  type: string
+                  format: uri
+                  description: Override the default callback URL for this test.
+      responses:
+        '200':
+          description: Test event sent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eventId:
+                    type: string
+                    description: The ID of the test event that was sent.
+                  deliveredAt:
+                    type: string
+                    format: date-time
+                  statusCode:
+                    type: integer
+                    description: The HTTP status code returned by your webhook handler.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /usage:
+    get:
+      operationId: getUsage
+      tags: [Usage]
+      summary: Get account usage
+      description: |
+        Returns usage statistics for your organization, including task counts,
+        payout totals, and average completion times.
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: month
+          description: Aggregation period.
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Start date (inclusive, ISO 8601 date).
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+          description: End date (inclusive, ISO 8601 date).
+      responses:
+        '200':
+          description: Usage statistics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: |
+        Use your API key as the bearer token:
+        `Authorization: Bearer ek_live_...`
+
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: The unique task identifier.
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 256
+      description: |
+        Client-provided idempotency key. If a request with this key has already
+        been processed, the original response is returned.
+
+  headers:
+    X-Request-Id:
+      description: Unique identifier for the request. Include this in support tickets.
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    TaskStatus:
+      type: string
+      enum:
+        - posted
+        - assigned
+        - submitted
+        - verified
+        - failed
+        - cancelled
+        - expired
+      description: |
+        Status of a task in the escalation pipeline.
+
+        Lifecycle: posted -> assigned -> submitted -> verified
+        Terminal states: verified, failed, cancelled, expired
+
+    RiskTier:
+      type: string
+      enum: [low, medium, high, critical]
+      description: Risk tier that determines worker pool selection and verification depth.
+
+    PayoutCurrency:
+      type: string
+      enum: [USD, SATS, BTC]
+      description: Currency for worker payouts.
+
+    Payout:
+      type: object
+      required: [currency, maxAmount]
+      properties:
+        currency:
+          $ref: '#/components/schemas/PayoutCurrency'
+        maxAmount:
+          type: number
+          minimum: 0
+          description: Maximum amount to pay for this task (in the specified currency).
+
+    PayoutResult:
+      type: object
+      required: [id, amount, currency, rail, paidAt]
+      properties:
+        id:
+          type: string
+          description: Unique payout identifier.
+        amount:
+          type: number
+          description: Amount paid to the worker.
+        currency:
+          $ref: '#/components/schemas/PayoutCurrency'
+        rail:
+          type: string
+          enum: [lightning, strike, internal]
+          description: Payment rail used.
+        paidAt:
+          type: string
+          format: date-time
+          description: Timestamp of when the payout was executed.
+
+    JsonSchema:
+      type: object
+      description: |
+        A JSON Schema definition used to validate task output.
+        Must be a valid JSON Schema (draft 2020-12 or compatible).
+      additionalProperties: true
+
+    TaskCreateRequest:
+      type: object
+      required:
+        - idempotencyKey
+        - taskType
+        - payload
+        - outputSchema
+        - payout
+      properties:
+        idempotencyKey:
+          type: string
+          maxLength: 256
+          description: |
+            Client-provided idempotency key. If a task with this key already
+            exists, the existing task is returned.
+        taskType:
+          type: string
+          maxLength: 128
+          description: |
+            The type of task (e.g., "refund_eligibility", "content_moderation").
+            Must match a registered task type.
+        riskTier:
+          $ref: '#/components/schemas/RiskTier'
+          default: medium
+        slaSeconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+          default: 600
+          description: SLA in seconds. The task must be completed within this window.
+        payload:
+          type: object
+          additionalProperties: true
+          description: Arbitrary context provided to the human worker.
+        outputSchema:
+          $ref: '#/components/schemas/JsonSchema'
+          description: JSON Schema the worker's output must conform to.
+        payout:
+          $ref: '#/components/schemas/Payout'
+        callbackUrl:
+          type: string
+          format: uri
+          description: Optional webhook URL for task lifecycle events.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Optional client-side tracking metadata. Not visible to workers.
+
+    Task:
+      type: object
+      required:
+        - id
+        - idempotencyKey
+        - status
+        - taskType
+        - riskTier
+        - slaSeconds
+        - payload
+        - outputSchema
+        - payout
+        - createdAt
+        - updatedAt
+        - expiresAt
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique task identifier (UUID v7).
+        idempotencyKey:
+          type: string
+          description: The idempotency key provided at creation time.
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+        taskType:
+          type: string
+          description: Task type identifier.
+        riskTier:
+          $ref: '#/components/schemas/RiskTier'
+        slaSeconds:
+          type: integer
+          description: SLA deadline in seconds from creation.
+        payload:
+          type: object
+          additionalProperties: true
+          description: The input payload provided at creation.
+        outputSchema:
+          $ref: '#/components/schemas/JsonSchema'
+        payout:
+          $ref: '#/components/schemas/Payout'
+        callbackUrl:
+          type: string
+          format: uri
+          description: Callback URL for webhook events.
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Client metadata.
+        output:
+          type: object
+          additionalProperties: true
+          description: |
+            The verified output from the worker.
+            Only present when status is "verified".
+        payoutResult:
+          $ref: '#/components/schemas/PayoutResult'
+          description: Only present when status is "verified" and payment is complete.
+        failureReason:
+          type: string
+          description: Failure reason. Only present when status is "failed".
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp of task creation.
+        updatedAt:
+          type: string
+          format: date-time
+          description: Timestamp of the last status update.
+        expiresAt:
+          type: string
+          format: date-time
+          description: Deadline computed from createdAt + slaSeconds.
+
+    TaskCancelResult:
+      type: object
+      required: [id, status, cancelledAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: The task ID that was cancelled.
+        status:
+          $ref: '#/components/schemas/TaskStatus'
+          description: Updated status ("cancelled").
+        cancelledAt:
+          type: string
+          format: date-time
+          description: Timestamp of cancellation.
+
+    TaskListResponse:
+      type: object
+      required: [data, hasMore]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Task'
+          description: Array of tasks matching the query.
+        hasMore:
+          type: boolean
+          description: Whether there are more results after this page.
+        nextCursor:
+          type: string
+          description: Cursor to pass as `after` for the next page.
+
+    WebhookEventType:
+      type: string
+      enum:
+        - task.posted
+        - task.assigned
+        - task.submitted
+        - task.verified
+        - task.failed
+        - task.cancelled
+        - task.expired
+      description: Type of webhook event.
+
+    WebhookEvent:
+      type: object
+      required: [id, type, createdAt, data]
+      properties:
+        id:
+          type: string
+          description: Unique event identifier.
+        type:
+          $ref: '#/components/schemas/WebhookEventType'
+        createdAt:
+          type: string
+          format: date-time
+          description: Timestamp of event creation.
+        data:
+          $ref: '#/components/schemas/Task'
+          description: The task data at the time of the event.
+      description: |
+        Webhook events are signed with HMAC-SHA256 using your organization's
+        webhook secret.
+
+        The signature is sent in the `X-Escalation-Signature` header with
+        format: `t=<unix-timestamp>,v1=<hex-encoded-hmac>`
+
+        The signed payload is: `<timestamp>.<raw-request-body>`
+
+    UsageResponse:
+      type: object
+      required: [period, startDate, endDate, tasks, payouts]
+      properties:
+        period:
+          type: string
+          enum: [day, week, month]
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        tasks:
+          type: object
+          properties:
+            total:
+              type: integer
+              description: Total tasks created in the period.
+            verified:
+              type: integer
+              description: Tasks that were successfully verified.
+            failed:
+              type: integer
+              description: Tasks that failed verification.
+            cancelled:
+              type: integer
+              description: Tasks that were cancelled.
+            expired:
+              type: integer
+              description: Tasks that expired before completion.
+            averageCompletionSeconds:
+              type: number
+              description: Average time from posted to verified (seconds).
+        payouts:
+          type: object
+          properties:
+            totalUsd:
+              type: number
+              description: Total payouts in USD equivalent.
+            totalSats:
+              type: integer
+              description: Total payouts in satoshis.
+            count:
+              type: integer
+              description: Number of payouts executed.
+
+    ErrorResponse:
+      type: object
+      required: [error, requestId]
+      properties:
+        error:
+          type: object
+          required: [type, message]
+          properties:
+            type:
+              type: string
+              description: Machine-readable error type.
+              enum:
+                - authentication_error
+                - authorization_error
+                - validation_error
+                - not_found
+                - conflict
+                - rate_limit_exceeded
+                - internal_error
+            message:
+              type: string
+              description: Human-readable error description.
+            code:
+              type: string
+              description: Machine-readable error code for specific error conditions.
+            details:
+              type: object
+              additionalProperties: true
+              description: Additional error details (e.g., field-level validation errors).
+        requestId:
+          type: string
+          format: uuid
+          description: Unique request identifier. Include this in support tickets.
+
+  responses:
+    BadRequest:
+      description: The request is malformed or missing required fields.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: validation_error
+              message: "Invalid request body"
+              details:
+                idempotencyKey: "Field is required"
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    Unauthorized:
+      description: The API key is missing, invalid, or revoked.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: authentication_error
+              message: "Invalid API key"
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    NotFound:
+      description: The requested resource does not exist.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: not_found
+              message: "Task not found"
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    Conflict:
+      description: The operation conflicts with the current state of the resource.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: conflict
+              message: "Task is already in a terminal state and cannot be cancelled"
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    UnprocessableEntity:
+      description: The request body is valid JSON but fails business validation.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: validation_error
+              message: "Output schema is not a valid JSON Schema"
+              details:
+                outputSchema: "Missing 'type' property"
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    RateLimited:
+      description: Rate limit exceeded. Retry after the duration specified in the Retry-After header.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+        Retry-After:
+          description: Number of seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: rate_limit_exceeded
+              message: "Rate limit exceeded. Retry after 30 seconds."
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
+
+    InternalError:
+      description: An unexpected server error occurred.
+      headers:
+        X-Request-Id:
+          $ref: '#/components/headers/X-Request-Id'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              type: internal_error
+              message: "An unexpected error occurred. Please try again."
+            requestId: "550e8400-e29b-41d4-a716-446655440000"
